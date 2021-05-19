@@ -1,0 +1,103 @@
+version: "3.5"
+
+############################################################
+##
+## NETWORK
+##
+############################################################
+
+#-----------------------------------------------------------
+# Ex: Create new network
+#-----------------------------------------------------------
+networks:
+  grph_net:
+    name: grph_net
+
+#-----------------------------------------------------------
+# Ex: Reuse network from another docker-compose
+#-----------------------------------------------------------
+#networks:
+#  grph_net:
+#    external:
+#      name: grph_net
+
+
+############################################################
+##
+## CONFIG
+##
+############################################################
+
+
+x-production-options:
+  &production_opts
+  restart: unless-stopped
+  networks:
+    - grph_net
+  #Warning: Loads into continer env, not used by compose envvar interpolation
+  env_file:
+    - ../envs/docker.env
+    - ../envs/general.env
+    - ../envs/graphistry.env
+    - ../envs/neptune.env
+    - ../envs/streamlit.env
+    - ../envs/tigergraph.env
+    - .env
+  #Warning: Loads into continer env, not used by compose envvar interpolation
+  environment:
+    - BASE_PATH=${BASE_PATH:-dashboard/}
+    - BASE_URL=${BASE_URL:-http://localhost:8501/dashboard}
+    - GRAPH_VIEWS=${GRAPH_VIEWS:-../python/views}
+
+x-build-kwargs:
+  &build_kwargs
+  args:
+    - DOCKER_TAG=${DOCKER_TAG:-latest}
+    - BUILDKIT_INLINE_CACHE=1
+    - GRAPHISTRY_FORGE_BASE_VERSION=${GRAPHISTRY_FORGE_BASE_VERSION:-v2.36.6-11.0}
+
+
+############################################################
+##
+## SERVICES
+##
+############################################################
+
+services:
+  streamlit:
+    << : *production_opts
+    image: graphistry/graph-app-kit-st:${DOCKER_TAG:-latest}
+    command: --server.baseUrlPath="$BASE_PATH" /apps/entrypoint.py
+    labels:
+      autoheal: "false"
+    build:
+      << : *build_kwargs
+      context: ..
+      dockerfile: ./docker/Dockerfile
+      cache_from:
+        - graphistry/graph-app-kit-st:${DOCKER_TAG:-latest}
+    ports:
+      - "${ST_PUBLIC_PORT:-8501}:8501"
+    labels:
+      autoheal: "true"
+    volumes:
+      - ../python:/apps
+      - ${GRAPH_VIEWS:-../python/views}:/apps/views
+      - ${NEPTUNE_KEY_PATH:-/tmp/mt.pem}:/secrets/neptune-reader.pem
+    healthcheck:
+      test: ["CMD", "curl", "-Lf", "http://localhost:8501/${BASE_PATH}healthz"]
+      interval: 30s
+      timeout: 30s
+      retries: 10
+      start_period: 10s
+
+  autoheal:
+    << : *production_opts
+    image: willfarrell/autoheal:v0.7.0
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - DOCKER_SOCK=/var/run/docker.sock
+      - AUTOHEAL_INTERVAL=60
+      - CURL_TIMEOUT=60
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
